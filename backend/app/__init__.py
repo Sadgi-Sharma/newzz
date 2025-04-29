@@ -1,44 +1,39 @@
 from flask import Flask
 from flask_cors import CORS
-from pymongo import MongoClient
-import cloudinary
-import cloudinary.uploader
-from config import Config
-from authlib.integrations.flask_client import OAuth
+from app.config import Config
+from flask_apscheduler import APScheduler
+from app.services.news_updater import news_updater
 
-# Initialize Flask App
-app = Flask(__name__)
-app.config.from_object(Config)
+from app.utils.db import ping_db
+from app.routes.news_routes import news
 
-# Enable CORS
-CORS(app)
+scheduler = APScheduler()
 
-# Initialize OAuth
-oauth = OAuth(app)
-oauth.register(
-    "auth0",
-    client_id=Config.AUTH0_CLIENT_ID,
-    client_secret=Config.AUTH0_CLIENT_SECRET,
-    client_kwargs={
-        "scope": "openid profile email",
-    },
-    server_metadata_url=f'https://{Config.AUTH0_DOMAIN}/.well-known/openid-configuration'
-)
+def create_app():
+    # Initialize Flask App
+    app = Flask(__name__)
+    app.config.from_object(Config)
 
-# Initialize MongoDB
-mongo = MongoClient(app.config["MONGO_URI"])
-db = mongo.get_database('news_app')
+    # Enable CORS
+    CORS(app)
 
-# Initialize Cloudinary
-cloudinary.config(
-    cloud_name=app.config["CLOUDINARY_CLOUD_NAME"],
-    api_key=app.config["CLOUDINARY_API_KEY"],
-    api_secret=app.config["CLOUDINARY_API_SECRET"]
-)
+    # Ping DB
+    ping_db()
 
-# Import blueprints
-from app.routes import main
-from app.auth import auth
-app.register_blueprint(main)
-app.register_blueprint(auth)
+    scheduler.init_app(app)
+    scheduler.start()
 
+    scheduler.add_job(
+        id='news_updater',
+        func=news_updater,
+        trigger='interval',
+        hours=1,
+    )
+    # uncomment to fetch news and classify and store it in mongodb
+    # if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    #     news_updater()
+
+    # Register Blueprints
+    app.register_blueprint(news, url_prefix='/news')
+
+    return app
